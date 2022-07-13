@@ -81,6 +81,9 @@ jobs:
         
     - name: Terraform validate
       id: tf-val
+      continue-on-error: true
+      run: terraform fmt -check
+      working-directory: ./${{ matrix.env }}
     
     - name: Terraform Check Format
       id: tf-fmt
