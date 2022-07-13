@@ -1,0 +1,104 @@
+name: Terraform
+
+on:
+  workflow_call:
+    inputs:
+      oidc:
+        required: true
+        type: string
+      region: 
+        required: false
+        type: string
+        default: eu-west-1        
+      runner-label:
+        required: false
+        type: string
+        default: self-hosted
+      envs:
+        required: false
+        type: string
+        default: "['envs/tooling/common/r53_hosted_zone']"
+      downstream-invocation:
+        type: string
+        required: false
+    secrets:
+      GH_TOKEN: 
+        required: false
+jobs:
+  notify:    
+    runs-on: ${{ inputs.runner-label }}
+
+    steps:
+      - name: Notifying For the Validate -> Plan -> [Apply - Main]
+        uses: mshick/add-pr-comment@v1
+        with:
+          repo-token: ${{ secrets.GH_TOKEN }}
+          repo-token-user-login: 'github-actions[bot]'
+          message: |
+            *** Running terraform validate|plan|[apply - main] ***
+
+            Results will display here momentarily... 
+
+  validate-plan-apply:
+    needs: notify   
+    runs-on: ${{ inputs.runner-label }}
+
+    strategy:
+      matrix: 
+        env: ${{ fromJSON(inputs.envs) }}
+
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        shell: bash
+                
+    steps:
+    # https://github.com/actions/setup-node 
+    # This is for self-hosted Runners.
+    - name: Setup Node
+      if: inputs.runner-label != 'ubuntu-linux'
+      uses: actions/setup-node@v3
+      with:
+        node-version: '14'
+
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        role-to-assume: ${{ inputs.oidc }}
+        aws-region: ${{ inputs.region }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.2.3
+        
+    - name: Terraform validate
+      id: tf-val
+    
+    - name: Terraform Check Format
+      id: tf-fmt
+      continue-on-error: true
+      run: terraform fmt -check
+      working-directory: ./${{ matrix.env }}
+
+    - name: Terraform Init
+      id: tf-init
+      run: |
+        git config --global url."https://oauth2:${{ secrets.GH_TOKEN }}@github.com".insteadOf https://github.com
+        terraform init -input=false
+      working-directory: ./${{ matrix.env }}
+
+    - name: Terraform Plan
+      id: plan
+      if: steps.format-chk.outcome == 'success' && steps.init.outcome == 'success'
+      run: | 
+        terraform plan -input=false -no-color -out=tfplan
+        terraform show -no-color tfplan
+      working-directory: ./${{ matrix.env }}
